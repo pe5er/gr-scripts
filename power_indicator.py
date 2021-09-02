@@ -5,8 +5,7 @@
 # SPDX-License-Identifier: GPL-3.0
 #
 # GNU Radio Python Flow Graph
-# Title: Power Indicator
-# Author: pe5er
+# Title: RF Signal Indicator
 # GNU Radio version: 3.9.2.0
 
 from distutils.version import StrictVersion
@@ -36,6 +35,10 @@ from argparse import ArgumentParser
 from gnuradio.eng_arg import eng_float, intx
 from gnuradio import uhd
 import time
+from gnuradio import zeromq
+from gnuradio.fft import logpwrfft
+from gnuradio.qtgui import Range, RangeWidget
+from PyQt5 import QtCore
 import threading
 
 
@@ -45,9 +48,9 @@ from gnuradio import qtgui
 class power_indicator(gr.top_block, Qt.QWidget):
 
     def __init__(self):
-        gr.top_block.__init__(self, "Power Indicator", catch_exceptions=True)
+        gr.top_block.__init__(self, "RF Signal Indicator", catch_exceptions=True)
         Qt.QWidget.__init__(self)
-        self.setWindowTitle("Power Indicator")
+        self.setWindowTitle("RF Signal Indicator")
         qtgui.util.check_set_qss()
         try:
             self.setWindowIcon(Qt.QIcon.fromTheme('gnuradio-grc'))
@@ -79,15 +82,21 @@ class power_indicator(gr.top_block, Qt.QWidget):
         # Variables
         ##################################################
         self.variable_function_probe_0 = variable_function_probe_0 = 0
-        self.variable_qtgui_label_0 = variable_qtgui_label_0 = variable_function_probe_0-80
-        self.samp_rate = samp_rate = 1e6
-        self.lo = lo = 0
-        self.freq = freq = 5.74e9
+        self.offset = offset = 0
+        self.variable_qtgui_label_0 = variable_qtgui_label_0 = variable_function_probe_0-offset
+        self.samp_rate = samp_rate = 20000000
+        self.rfgain = rfgain = 50
+        self.freq = freq = 5.735e9
+        self.averages = averages = 1000
 
         ##################################################
         # Blocks
         ##################################################
-        self.level_block = blocks.probe_signal_f()
+        self._rfgain_range = Range(0, 76, 1, 50, 200)
+        self._rfgain_win = RangeWidget(self._rfgain_range, self.set_rfgain, 'rfgain', "counter_slider", float, QtCore.Qt.Horizontal)
+        self.top_layout.addWidget(self._rfgain_win)
+        self.blocks_probe_signal_x_0 = blocks.probe_signal_f()
+        self.zeromq_pub_sink_0 = zeromq.pub_sink(gr.sizeof_float, 1, 'tcp://192.168.8.248:50001', 100, False, -1, '')
         self._variable_qtgui_label_0_tool_bar = Qt.QToolBar(self)
 
         if None:
@@ -95,14 +104,14 @@ class power_indicator(gr.top_block, Qt.QWidget):
         else:
             self._variable_qtgui_label_0_formatter = lambda x: str(x)
 
-        self._variable_qtgui_label_0_tool_bar.addWidget(Qt.QLabel('variable_qtgui_label_0' + ": "))
+        self._variable_qtgui_label_0_tool_bar.addWidget(Qt.QLabel('Peak Value: ' + ": "))
         self._variable_qtgui_label_0_label = Qt.QLabel(str(self._variable_qtgui_label_0_formatter(self.variable_qtgui_label_0)))
         self._variable_qtgui_label_0_tool_bar.addWidget(self._variable_qtgui_label_0_label)
         self.top_layout.addWidget(self._variable_qtgui_label_0_tool_bar)
         def _variable_function_probe_0_probe():
           while True:
 
-            val = self.level_block()
+            val = self.blocks_probe_signal_x_0.level()
             try:
               try:
                 self.doc.add_next_tick_callback(functools.partial(self.set_variable_function_probe_0,val))
@@ -110,7 +119,7 @@ class power_indicator(gr.top_block, Qt.QWidget):
                 self.set_variable_function_probe_0(val)
             except AttributeError:
               pass
-            time.sleep(1.0 / (60))
+            time.sleep(1.0 / (15))
         _variable_function_probe_0_thread = threading.Thread(target=_variable_function_probe_0_probe)
         _variable_function_probe_0_thread.daemon = True
         _variable_function_probe_0_thread.start()
@@ -128,108 +137,65 @@ class power_indicator(gr.top_block, Qt.QWidget):
         self.uhd_usrp_source_0.set_center_freq(freq, 0)
         self.uhd_usrp_source_0.set_antenna("RX2", 0)
         self.uhd_usrp_source_0.set_bandwidth(samp_rate, 0)
-        self.uhd_usrp_source_0.set_gain(50, 0)
-        self.qtgui_waterfall_sink_x_0 = qtgui.waterfall_sink_c(
-            4096, #size
+        self.uhd_usrp_source_0.set_gain(rfgain, 0)
+        self.uhd_usrp_source_0.set_auto_dc_offset(True, 0)
+        self.qtgui_sink_x_0 = qtgui.sink_c(
+            4096, #fftsize
             window.WIN_BLACKMAN_hARRIS, #wintype
             freq, #fc
             samp_rate, #bw
             "", #name
-            1, #number of inputs
+            True, #plotfreq
+            True, #plotwaterfall
+            True, #plottime
+            True, #plotconst
             None # parent
         )
-        self.qtgui_waterfall_sink_x_0.set_update_time(0.10)
-        self.qtgui_waterfall_sink_x_0.enable_grid(False)
-        self.qtgui_waterfall_sink_x_0.enable_axis_labels(True)
+        self.qtgui_sink_x_0.set_update_time(1.0/10)
+        self._qtgui_sink_x_0_win = sip.wrapinstance(self.qtgui_sink_x_0.pyqwidget(), Qt.QWidget)
 
+        self.qtgui_sink_x_0.enable_rf_freq(True)
 
-
-        labels = ['', '', '', '', '',
-                  '', '', '', '', '']
-        colors = [0, 0, 0, 0, 0,
-                  0, 0, 0, 0, 0]
-        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
-                  1.0, 1.0, 1.0, 1.0, 1.0]
-
-        for i in range(1):
-            if len(labels[i]) == 0:
-                self.qtgui_waterfall_sink_x_0.set_line_label(i, "Data {0}".format(i))
-            else:
-                self.qtgui_waterfall_sink_x_0.set_line_label(i, labels[i])
-            self.qtgui_waterfall_sink_x_0.set_color_map(i, colors[i])
-            self.qtgui_waterfall_sink_x_0.set_line_alpha(i, alphas[i])
-
-        self.qtgui_waterfall_sink_x_0.set_intensity_range(-140, 10)
-
-        self._qtgui_waterfall_sink_x_0_win = sip.wrapinstance(self.qtgui_waterfall_sink_x_0.pyqwidget(), Qt.QWidget)
-        self.top_layout.addWidget(self._qtgui_waterfall_sink_x_0_win)
-        self.qtgui_freq_sink_x_0 = qtgui.freq_sink_c(
-            4096, #size
-            window.WIN_BLACKMAN_hARRIS, #wintype
-            freq, #fc
-            samp_rate, #bw
-            "", #name
-            1,
-            None # parent
-        )
-        self.qtgui_freq_sink_x_0.set_update_time(0.10)
-        self.qtgui_freq_sink_x_0.set_y_axis(-140, 10)
-        self.qtgui_freq_sink_x_0.set_y_label('Relative Gain', 'dB')
-        self.qtgui_freq_sink_x_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, 0.0, 0, "")
-        self.qtgui_freq_sink_x_0.enable_autoscale(False)
-        self.qtgui_freq_sink_x_0.enable_grid(False)
-        self.qtgui_freq_sink_x_0.set_fft_average(1.0)
-        self.qtgui_freq_sink_x_0.enable_axis_labels(True)
-        self.qtgui_freq_sink_x_0.enable_control_panel(False)
-        self.qtgui_freq_sink_x_0.set_fft_window_normalized(False)
-
-
-
-        labels = ['', '', '', '', '',
-            '', '', '', '', '']
-        widths = [1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1]
-        colors = ["blue", "red", "green", "black", "cyan",
-            "magenta", "yellow", "dark red", "dark green", "dark blue"]
-        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
-            1.0, 1.0, 1.0, 1.0, 1.0]
-
-        for i in range(1):
-            if len(labels[i]) == 0:
-                self.qtgui_freq_sink_x_0.set_line_label(i, "Data {0}".format(i))
-            else:
-                self.qtgui_freq_sink_x_0.set_line_label(i, labels[i])
-            self.qtgui_freq_sink_x_0.set_line_width(i, widths[i])
-            self.qtgui_freq_sink_x_0.set_line_color(i, colors[i])
-            self.qtgui_freq_sink_x_0.set_line_alpha(i, alphas[i])
-
-        self._qtgui_freq_sink_x_0_win = sip.wrapinstance(self.qtgui_freq_sink_x_0.pyqwidget(), Qt.QWidget)
-        self.top_layout.addWidget(self._qtgui_freq_sink_x_0_win)
+        self.top_layout.addWidget(self._qtgui_sink_x_0_win)
         self.low_pass_filter_0 = filter.fir_filter_ccf(
             1,
             firdes.low_pass(
                 1,
                 samp_rate,
-                0.5e6,
+                samp_rate*0.45,
                 1e6,
                 window.WIN_HAMMING,
                 6.76))
-        self.blocks_nlog10_ff_0 = blocks.nlog10_ff(1, 1, 0)
-        self.blocks_moving_average_xx_0 = blocks.moving_average_ff(50000, 20e-6, 4000, 1)
-        self.blocks_complex_to_mag_squared_0 = blocks.complex_to_mag_squared(1)
+        self.logpwrfft_x_0 = logpwrfft.logpwrfft_c(
+            sample_rate=samp_rate,
+            fft_size=4096,
+            ref_scale=2,
+            frame_rate=30,
+            avg_alpha=0.1,
+            average=False)
+        self.high_pass_filter_0 = filter.fir_filter_ccf(
+            1,
+            firdes.high_pass(
+                1,
+                samp_rate,
+                200e3,
+                400e3,
+                window.WIN_HAMMING,
+                6.76))
+        self.blocks_max_xx_0 = blocks.max_ff(4096, 1)
 
 
 
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.blocks_complex_to_mag_squared_0, 0), (self.blocks_moving_average_xx_0, 0))
-        self.connect((self.blocks_moving_average_xx_0, 0), (self.blocks_nlog10_ff_0, 0))
-        self.connect((self.blocks_nlog10_ff_0, 0), (self.level_block, 0))
-        self.connect((self.low_pass_filter_0, 0), (self.blocks_complex_to_mag_squared_0, 0))
-        self.connect((self.low_pass_filter_0, 0), (self.qtgui_freq_sink_x_0, 0))
-        self.connect((self.uhd_usrp_source_0, 0), (self.low_pass_filter_0, 0))
-        self.connect((self.uhd_usrp_source_0, 0), (self.qtgui_waterfall_sink_x_0, 0))
+        self.connect((self.blocks_max_xx_0, 0), (self.blocks_probe_signal_x_0, 0))
+        self.connect((self.blocks_max_xx_0, 0), (self.zeromq_pub_sink_0, 0))
+        self.connect((self.high_pass_filter_0, 0), (self.low_pass_filter_0, 0))
+        self.connect((self.logpwrfft_x_0, 0), (self.blocks_max_xx_0, 0))
+        self.connect((self.low_pass_filter_0, 0), (self.logpwrfft_x_0, 0))
+        self.connect((self.low_pass_filter_0, 0), (self.qtgui_sink_x_0, 0))
+        self.connect((self.uhd_usrp_source_0, 0), (self.high_pass_filter_0, 0))
 
 
     def closeEvent(self, event):
@@ -245,7 +211,14 @@ class power_indicator(gr.top_block, Qt.QWidget):
 
     def set_variable_function_probe_0(self, variable_function_probe_0):
         self.variable_function_probe_0 = variable_function_probe_0
-        self.set_variable_qtgui_label_0(self._variable_qtgui_label_0_formatter(self.variable_function_probe_0-80))
+        self.set_variable_qtgui_label_0(self._variable_qtgui_label_0_formatter(self.variable_function_probe_0-self.offset))
+
+    def get_offset(self):
+        return self.offset
+
+    def set_offset(self, offset):
+        self.offset = offset
+        self.set_variable_qtgui_label_0(self._variable_qtgui_label_0_formatter(self.variable_function_probe_0-self.offset))
 
     def get_variable_qtgui_label_0(self):
         return self.variable_qtgui_label_0
@@ -259,27 +232,34 @@ class power_indicator(gr.top_block, Qt.QWidget):
 
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
-        self.high_pass_filter_0.set_taps(firdes.high_pass(1, self.samp_rate, 100e3, 100e3, window.WIN_HAMMING, 6.76))
-        self.low_pass_filter_0.set_taps(firdes.low_pass(1, self.samp_rate, 0.5e6, 1e6, window.WIN_HAMMING, 6.76))
-        self.qtgui_freq_sink_x_0.set_frequency_range(self.freq, self.samp_rate)
-        self.qtgui_waterfall_sink_x_0.set_frequency_range(self.freq, self.samp_rate)
+        self.high_pass_filter_0.set_taps(firdes.high_pass(1, self.samp_rate, 200e3, 400e3, window.WIN_HAMMING, 6.76))
+        self.logpwrfft_x_0.set_sample_rate(self.samp_rate)
+        self.low_pass_filter_0.set_taps(firdes.low_pass(1, self.samp_rate, self.samp_rate*0.45, 1e6, window.WIN_HAMMING, 6.76))
+        self.qtgui_sink_x_0.set_frequency_range(self.freq, self.samp_rate)
         self.uhd_usrp_source_0.set_samp_rate(self.samp_rate)
         self.uhd_usrp_source_0.set_bandwidth(self.samp_rate, 0)
 
-    def get_lo(self):
-        return self.lo
+    def get_rfgain(self):
+        return self.rfgain
 
-    def set_lo(self, lo):
-        self.lo = lo
+    def set_rfgain(self, rfgain):
+        self.rfgain = rfgain
+        self.uhd_usrp_source_0.set_gain(self.rfgain, 0)
 
     def get_freq(self):
         return self.freq
 
     def set_freq(self, freq):
         self.freq = freq
-        self.qtgui_freq_sink_x_0.set_frequency_range(self.freq, self.samp_rate)
-        self.qtgui_waterfall_sink_x_0.set_frequency_range(self.freq, self.samp_rate)
+        self.qtgui_sink_x_0.set_frequency_range(self.freq, self.samp_rate)
         self.uhd_usrp_source_0.set_center_freq(self.freq, 0)
+
+    def get_averages(self):
+        return self.averages
+
+    def set_averages(self, averages):
+        self.averages = averages
+        self.blocks_moving_average_xx_1.set_length_and_scale(self.averages, 1/self.averages)
 
 
 
